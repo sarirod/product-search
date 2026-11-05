@@ -1,0 +1,226 @@
+<?php
+declare(strict_types=1);
+
+/**
+ * Hybrid product search.
+ *
+ *   1. Meaning:  the query is embedded (Gemini) and compared with every product vector (pgvector).
+ *   2. Keywords: query words are matched against name / brand / category / needs / description.
+ *   3. Fusion:   both ranked lists are merged with Reciprocal Rank Fusion (RRF).
+ *
+ * If Gemini is unavailable the search keeps working in keyword-only mode.
+ */
+final class Search
+{
+    public const MAX_QUERY_LENGTH = 200;
+    public const MAX_RESULTS = 24;
+
+    /** How many candidates each method contributes before fusion. */
+    private const CANDIDATES = 50;
+
+    /** RRF constant: 60 is the standard value from the original paper (Cormack et al., 2009). */
+    private const RRF_K = 60;
+
+    /**
+     * Relevance cut-offs for the meaning search (cosine similarity, 1 = identical).
+     * Calibrated on real queries — see README "How it was tested".
+     *  - MIN_SIMILARITY: below this a product is not related to the query at all.
+     *  - RELATIVE_GAP: keep only products reasonably close to the best match.
+     */
+    public const MIN_SIMILARITY = 0.55;
+    public const RELATIVE_GAP = 0.12;
+
+    /** Keyword weight per field: a word in the product name counts more than in the description. */
+    private const FIELD_WEIGHTS = ['name_norm' => 3.0, 'brand_norm' => 3.0, 'cat_norm' => 2.0, 'needs_norm' => 1.5, 'desc_norm' => 1.0];
+
+    public function __construct(
+        private readonly PDO $db,
+        private readonly ?Embedder $embedder,
+    ) {
+    }
+
+    /**
+     * @return array{query:string, mode:string, took_ms:int, count:int, results:list<array<string,mixed>>}
+     */
+    public function search(string $rawQuery): array
+    {
+        $started = hrtime(true);
+        $normalized = Text::normalize(mb_substr($rawQuery, 0, self::MAX_QUERY_LENGTH));
+        $tokens = Text::tokens($normalized);
+
+        $vectorHits = [];
+        $mode = 'keyword';
+        if ($this->embedder !== null && $normalized !== '') {
+            try {
+                $vectorHits = $this->vectorCandidates($this->queryVector($normalized));
+                $mode = 'hybrid';
+            } catch (Throwable $e) {
+                // Degrade gracefully: log the reason (never the key) and continue with keywords.
+                error_log('[search] embedding unavailable, keyword fallback: ' . $e->getMessage());
+            }
+        }
+        $keywordHits = $tokens ? $this->keywordCandidates($tokens) : [];
+
+        $ids = self::fuse([array_keys($vectorHits), array_keys($keywordHits)], self::MAX_RESULTS);
+        $results = $this->fetchProducts($ids);
+
+        return [
+            'query'   => $rawQuery,
+            'mode'    => $mode,
+            'took_ms' => (int) round((hrtime(true) - $started) / 1e6),
+            'count'   => count($results),
+            'results' => $results,
+        ];
+    }
+
+    /**
+     * Reciprocal Rank Fusion: score(product) = Σ 1 / (K + rank in each list).
+     * Rewards products ranked high by either method, and most of all by both.
+     *
+     * @param list<list<string>> $rankedLists
+     * @return list<string>
+     */
+    public static function fuse(array $rankedLists, int $limit): array
+    {
+        $scores = [];
+        foreach ($rankedLists as $list) {
+            foreach (array_values($list) as $i => $id) {
+                $scores[$id] = ($scores[$id] ?? 0.0) + 1.0 / (self::RRF_K + $i + 1);
+            }
+        }
+        // Stable sort: on equal score keep first-seen order (vector list comes first).
+        $order = array_flip(array_keys($scores));
+        uksort($scores, static fn ($a, $b) => [$scores[$b], $order[$a]] <=> [$scores[$a], $order[$b]]);
+        return array_slice(array_map('strval', array_keys($scores)), 0, $limit);
+    }
+
+    /**
+     * Keep the vector hits that pass both relevance thresholds.
+     *
+     * @param array<string,float> $similarities id => cosine similarity, best first
+     * @return array<string,float>
+     */
+    public static function applyRelevanceCutoff(array $similarities): array
+    {
+        if (!$similarities) {
+            return [];
+        }
+        $floor = max(self::MIN_SIMILARITY, reset($similarities) - self::RELATIVE_GAP);
+        return array_filter($similarities, static fn (float $s): bool => $s >= $floor);
+    }
+
+    /** Query vector as a pgvector literal; cached in the DB so repeated searches skip the API call. */
+    private function queryVector(string $normalized): string
+    {
+        $model = $this->embedder->model . '/' . $this->embedder->dimensions;
+        $stmt = $this->db->prepare('SELECT embedding::text FROM query_embeddings WHERE model = ? AND query_norm = ?');
+        $stmt->execute([$model, $normalized]);
+        $cached = $stmt->fetchColumn();
+        if (is_string($cached)) {
+            return $cached;
+        }
+
+        $vector = Embedder::toPgVector($this->embedder->embedQuery($normalized));
+        $this->db->prepare(
+            'INSERT INTO query_embeddings (model, query_norm, embedding) VALUES (?, ?, CAST(? AS vector))
+             ON CONFLICT (model, query_norm) DO NOTHING'
+        )->execute([$model, $normalized, $vector]);
+        return $vector;
+    }
+
+    /** @return array<string,float> id => similarity, best first, already cut off */
+    private function vectorCandidates(string $vector): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT id, 1 - (embedding <=> CAST(:v AS vector)) AS similarity
+               FROM products
+              WHERE embedding IS NOT NULL
+              ORDER BY similarity DESC
+              LIMIT ' . self::CANDIDATES
+        );
+        $stmt->execute(['v' => $vector]);
+        $similarities = [];
+        foreach ($stmt as $row) {
+            $similarities[(string) $row['id']] = (float) $row['similarity'];
+        }
+        return self::applyRelevanceCutoff($similarities);
+    }
+
+    /**
+     * Each query word becomes a regex that matches the start of a word (Hebrew prefixes allowed).
+     * A product must match at least half of the meaningful words; numbers ("16", "128") count less.
+     *
+     * @param list<string> $tokens
+     * @return array<string,float> id => score, best first
+     */
+    private function keywordCandidates(array $tokens): array
+    {
+        $terms = [];
+        $wordTokens = 0;
+        foreach ($tokens as $t) {
+            $numeric = Text::isNumeric($t);
+            $wordTokens += $numeric ? 0 : 1;
+            $terms[] = ['re' => Text::wordStartRegex($t), 'wt' => $numeric ? 0.3 : 1.0, 'counts' => $numeric ? 0 : 1];
+        }
+        $minMatched = max(1, (int) ceil($wordTokens * 0.5));
+
+        $cases = '';
+        foreach (self::FIELD_WEIGHTS as $field => $weight) {
+            $cases .= " WHEN p.$field ~ t.re THEN $weight";
+        }
+        $sql = "
+            WITH t AS (
+                SELECT e->>'re' AS re, (e->>'wt')::float AS wt, (e->>'counts')::int AS counts
+                  FROM json_array_elements(CAST(:terms AS json)) AS e
+            ), hits AS (
+                SELECT p.id, t.wt, t.counts, CASE $cases ELSE 0 END AS w
+                  FROM products p CROSS JOIN t
+            )
+            SELECT id,
+                   SUM(counts) FILTER (WHERE w > 0) AS matched,
+                   SUM(w * wt) AS score
+              FROM hits
+             GROUP BY id
+            HAVING SUM(w) > 0 AND COALESCE(SUM(counts) FILTER (WHERE w > 0), 0) >= :min
+             ORDER BY matched DESC, score DESC, id
+             LIMIT " . self::CANDIDATES;
+
+        // Pure-number queries (e.g. "128") have no word tokens: then any match is enough.
+        $stmt = $this->db->prepare($wordTokens === 0 ? str_replace('>= :min', '>= 0', $sql) : $sql);
+        $params = ['terms' => json_encode($terms, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)];
+        if ($wordTokens > 0) {
+            $params['min'] = $minMatched;
+        }
+        $stmt->execute($params);
+
+        $out = [];
+        foreach ($stmt as $row) {
+            $out[(string) $row['id']] = (float) $row['score'];
+        }
+        return $out;
+    }
+
+    /**
+     * @param list<string> $ids in display order
+     * @return list<array<string,mixed>>
+     */
+    private function fetchProducts(array $ids): array
+    {
+        if (!$ids) {
+            return [];
+        }
+        $stmt = $this->db->prepare(
+            'SELECT id, name, brand, category, subcategory, price, image_url
+               FROM products
+              WHERE id IN (SELECT json_array_elements_text(CAST(:ids AS json)))'
+        );
+        $stmt->execute(['ids' => json_encode($ids, JSON_THROW_ON_ERROR)]);
+        $byId = [];
+        foreach ($stmt as $row) {
+            $row['price'] = (float) $row['price'];
+            $row['brand'] = $row['brand'] ?? '';
+            $byId[$row['id']] = $row;
+        }
+        return array_values(array_filter(array_map(static fn ($id) => $byId[$id] ?? null, $ids)));
+    }
+}
