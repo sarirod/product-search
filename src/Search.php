@@ -66,7 +66,7 @@ final class Search
         }
         $vectorHits = self::applyRelevanceCutoff($vectorPool ?? []);
         $wordTokens = count(array_filter($tokens, static fn (string $t): bool => !Text::isNumeric($t)));
-        $keywordHits = self::filterKeywordHits($tokens ? $this->keywordCandidates($tokens) : [], $wordTokens, $vectorPool);
+        $keywordHits = self::filterKeywordHits($tokens ? $this->keywordCandidates($tokens) : [], $wordTokens, $vectorPool === null ? null : $vectorHits);
 
         $ids = self::fuse([array_keys($vectorHits), array_keys($keywordHits)], self::MAX_RESULTS);
         $results = $this->fetchProducts($ids);
