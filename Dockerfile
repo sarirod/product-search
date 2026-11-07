@@ -11,7 +11,7 @@ RUN apt-get update \
 ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
 RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf \
  && sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf \
- && printf '%s\n' 'ServerTokens Prod' 'ServerSignature Off' > /etc/apache2/conf-enabled/hardening.conf \
+ && printf '%s\n' 'ServerName localhost' 'ServerTokens Prod' 'ServerSignature Off' > /etc/apache2/conf-enabled/hardening.conf \
  && printf '%s\n' 'expose_php = Off' 'display_errors = Off' 'log_errors = On' > /usr/local/etc/php/conf.d/production.ini
 
 COPY . /var/www/html/
