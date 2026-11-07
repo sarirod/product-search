@@ -136,9 +136,12 @@ final class Search
         if ($vectorPool === null) {
             return $keywordMatched;
         }
+        // "Strong" keyword hit: all words, or at least 2 words and ~60% of them
+        // ("משחקי מחשב למתחילים" -> a gaming laptop matching "משחק" + "מחשב" is kept).
+        $strong = min($wordTokens, max(2, (int) ceil($wordTokens * 0.6)));
         return array_filter(
             $keywordMatched,
-            static fn (int $matched, string $id): bool => $matched >= $wordTokens || isset($vectorPool[$id]),
+            static fn (int $matched, string $id): bool => $matched >= $strong || isset($vectorPool[$id]),
             ARRAY_FILTER_USE_BOTH
         );
     }

@@ -90,6 +90,8 @@ same('narrow spread keeps only the top cluster', ['T1', 'T2'], array_keys(Search
 echo "Search::filterKeywordHits\n";
 $kw = ['FULL' => 3, 'PARTIAL_IN_POOL' => 2, 'PARTIAL_NOISE' => 1];
 same('partial match kept only if meaning search also has it', ['FULL', 'PARTIAL_IN_POOL'], array_keys(Search::filterKeywordHits($kw, 3, ['PARTIAL_IN_POOL' => 0.61])));
+same('2 of 3 words is a strong match even without meaning support', ['FULL', 'PARTIAL_IN_POOL'], array_keys(Search::filterKeywordHits($kw, 3, [])));
+same('1 of 2 words needs meaning support', ['B'], array_keys(Search::filterKeywordHits(['A' => 1, 'B' => 2], 2, [])));
 same('keyword-only mode keeps everything', array_keys($kw), array_keys(Search::filterKeywordHits($kw, 3, null)));
 same('number-only query keeps everything', ['N'], array_keys(Search::filterKeywordHits(['N' => 0], 0, [])));
 
