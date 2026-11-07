@@ -55,6 +55,13 @@ echo "Text::wordStartRegex\n";
 $re = '/' . str_replace('/', '\/', Text::wordStartRegex('כלב')) . '/u';
 check('matches word with prefix and suffix ("לכלבים")', preg_match($re, 'מיטה לכלבים גדולים') === 1);
 check('does not match in the middle of a word', preg_match($re, 'אבגכלב') === 0);
+$reLego = '/' . str_replace('/', '\/', Text::wordStartRegex('לגו')) . '/u';
+check('short word does not match a longer word ("לגו" vs "לגוף")', preg_match($reLego, 'מכשיר אפילציה לגוף') === 0);
+check('short word still matches itself with a prefix ("הלגו")', preg_match($reLego, 'ערכת הלגו הגדולה') === 1 && preg_match($reLego, 'לגו') === 1);
+$reSofa = '/' . str_replace('/', '\/', Text::wordStartRegex('ספה')) . '/u';
+check('short word matches before a space / at the end ("מהספה", "ספה")', preg_match($reSofa, 'שערות מהספה והשטיח') === 1 && preg_match($reSofa, 'ספה') === 1);
+check('short word does not match a different longer word ("ספה" vs "ספהר")', preg_match($reSofa, 'ספהר') === 0);
+check('"כלב" still matches "לכלבים" (3 letters + ים)', preg_match($re, 'מיטה לכלבים') === 1);
 $reDot = '/' . str_replace('/', '\/', Text::wordStartRegex('2.5')) . '/u';
 check('escapes regex characters', preg_match($reDot, 'נפח 2x5') === 0 && preg_match($reDot, 'נפח 2.5 ליטר') === 1);
 

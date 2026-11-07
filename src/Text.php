@@ -101,9 +101,20 @@ final class Text
     public static function wordStartRegex(string $token): string
     {
         $alts = array_map(
-            static fn (string $v): string => (string) preg_replace('/[\\\\.^$|?*+()\[\]{}]/', '\\\\$0', $v),
+            static function (string $v): string {
+                $escaped = (string) preg_replace('/[\\\\.^$|?*+()\[\]{}]/', '\\\\$0', $v);
+                // Short Hebrew words: any continuation is too permissive ("לגו" would match "לגוף"),
+                // so only real Hebrew inflection endings may follow, then the word must end.
+                if (preg_match('/^\p{Hebrew}+$/u', $v) && mb_strlen($v) <= 3) {
+                    return $escaped . self::SHORT_WORD_ENDING;
+                }
+                return $escaped;
+            },
             self::variants($token)
         );
         return '(^|[ -])[' . self::HEB_PREFIXES . ']{0,2}(' . implode('|', $alts) . ')';
     }
+
+    /** Optional Hebrew suffix (plural / feminine / possessive), then end of word. */
+    private const SHORT_WORD_ENDING = '(ים|ות|ה|ת|י|ו|יות|ית)?($|[^א-תa-z0-9])';
 }
