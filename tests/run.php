@@ -41,6 +41,7 @@ echo "Text::tokens\n";
 same('removes stopwords', ['מתנה', 'לבשל'], Text::tokens(Text::normalize('מתנה למישהו שאוהב לבשל')));
 same('removes 1-char tokens and duplicates', ['שואב', 'אבק'], Text::tokens('שואב ו אבק שואב'));
 same('stopwords-only query has no tokens', [], Text::tokens('משהו של מישהו'));
+same('numeric tokens stay strings ("iPhone 16" used to crash)', ['iphone', '16'], Text::tokens('iphone 16'));
 
 echo "Text::variants\n";
 same('peels Hebrew prefixes', ['מהספה', 'הספה', 'ספה'], Text::variants('מהספה'));
@@ -78,6 +79,12 @@ same('flat distribution returns nothing', [], Search::applyRelevanceCutoff($flat
 $narrow = ['T1' => 0.660, 'T2' => 0.650, 'T3' => 0.635];
 for ($i = count($narrow); $i < Search::CANDIDATES; $i++) { $narrow["N$i"] = 0.630 - $i * 0.0003; } // spread ~0.045 -> floor ~0.638
 same('narrow spread keeps only the top cluster', ['T1', 'T2'], array_keys(Search::applyRelevanceCutoff($narrow)));
+
+echo "Search::filterKeywordHits\n";
+$kw = ['FULL' => 3, 'PARTIAL_IN_POOL' => 2, 'PARTIAL_NOISE' => 1];
+same('partial match kept only if meaning search also has it', ['FULL', 'PARTIAL_IN_POOL'], array_keys(Search::filterKeywordHits($kw, 3, ['PARTIAL_IN_POOL' => 0.61])));
+same('keyword-only mode keeps everything', array_keys($kw), array_keys(Search::filterKeywordHits($kw, 3, null)));
+same('number-only query keeps everything', ['N'], array_keys(Search::filterKeywordHits(['N' => 0], 0, [])));
 
 echo "Db::parseUrl\n";
 [$dsn, $user, $pass] = Db::parseUrl('postgresql://alice:p%40ss@ep-cool-1.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require');

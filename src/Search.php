@@ -53,18 +53,20 @@ final class Search
         $normalized = Text::normalize(mb_substr($rawQuery, 0, self::MAX_QUERY_LENGTH));
         $tokens = Text::tokens($normalized);
 
-        $vectorHits = [];
+        $vectorPool = null; // all vector candidates (before the cut-off); null = meaning search unavailable
         $mode = 'keyword';
         if ($this->embedder !== null && $normalized !== '') {
             try {
-                $vectorHits = $this->vectorCandidates($this->queryVector($normalized));
+                $vectorPool = $this->vectorCandidates($this->queryVector($normalized));
                 $mode = 'hybrid';
             } catch (Throwable $e) {
                 // Degrade gracefully: log the reason (never the key) and continue with keywords.
                 error_log('[search] embedding unavailable, keyword fallback: ' . $e->getMessage());
             }
         }
-        $keywordHits = $tokens ? $this->keywordCandidates($tokens) : [];
+        $vectorHits = self::applyRelevanceCutoff($vectorPool ?? []);
+        $wordTokens = count(array_filter($tokens, static fn (string $t): bool => !Text::isNumeric($t)));
+        $keywordHits = self::filterKeywordHits($tokens ? $this->keywordCandidates($tokens) : [], $wordTokens, $vectorPool);
 
         $ids = self::fuse([array_keys($vectorHits), array_keys($keywordHits)], self::MAX_RESULTS);
         $results = $this->fetchProducts($ids);
@@ -119,6 +121,28 @@ final class Search
         return array_filter($similarities, static fn (float $s): bool => $s >= $floor);
     }
 
+    /**
+     * A keyword hit that matched only SOME of the query words is kept only if the meaning search
+     * also considers it a candidate. This removes noise such as "מד חום מגע" for
+     * "ערכת לימוד מגע לילדים" (only the word "מגע" matched, and the meaning is unrelated).
+     * Without meaning search ($vectorPool === null) all keyword hits are kept.
+     *
+     * @param array<string,int>        $keywordMatched id => number of query words matched, best first
+     * @param array<string,float>|null $vectorPool     id => similarity of all vector candidates
+     * @return array<string,int>
+     */
+    public static function filterKeywordHits(array $keywordMatched, int $wordTokens, ?array $vectorPool): array
+    {
+        if ($vectorPool === null) {
+            return $keywordMatched;
+        }
+        return array_filter(
+            $keywordMatched,
+            static fn (int $matched, string $id): bool => $matched >= $wordTokens || isset($vectorPool[$id]),
+            ARRAY_FILTER_USE_BOTH
+        );
+    }
+
     /** Query vector as a pgvector literal; cached in the DB so repeated searches skip the API call. */
     private function queryVector(string $normalized): string
     {
@@ -138,7 +162,7 @@ final class Search
         return $vector;
     }
 
-    /** @return array<string,float> id => similarity, best first, already cut off */
+    /** @return array<string,float> id => similarity of the top candidates, best first (before the cut-off) */
     private function vectorCandidates(string $vector): array
     {
         $stmt = $this->db->prepare(
@@ -153,7 +177,7 @@ final class Search
         foreach ($stmt as $row) {
             $similarities[(string) $row['id']] = (float) $row['similarity'];
         }
-        return self::applyRelevanceCutoff($similarities);
+        return $similarities;
     }
 
     /**
@@ -161,7 +185,7 @@ final class Search
      * A product must match at least half of the meaningful words; numbers ("16", "128") count less.
      *
      * @param list<string> $tokens
-     * @return array<string,float> id => score, best first
+     * @return array<string,int> id => number of query words matched, best first
      */
     private function keywordCandidates(array $tokens): array
     {
@@ -205,7 +229,7 @@ final class Search
 
         $out = [];
         foreach ($stmt as $row) {
-            $out[(string) $row['id']] = (float) $row['score'];
+            $out[(string) $row['id']] = (int) $row['matched'];
         }
         return $out;
     }

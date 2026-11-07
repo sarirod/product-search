@@ -54,7 +54,8 @@ final class Text
             }
             $out[$t] = true;
         }
-        return array_keys($out);
+        // array_keys() would turn numeric tokens like "16" into ints — keep them strings.
+        return array_map('strval', array_keys($out));
     }
 
     /**
