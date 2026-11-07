@@ -16,7 +16,7 @@ final class Search
     public const MAX_RESULTS = 24;
 
     /** How many candidates each method contributes before fusion. */
-    private const CANDIDATES = 50;
+    public const CANDIDATES = 50;
 
     /** RRF constant: 60 is the standard value from the original paper (Cormack et al., 2009). */
     private const RRF_K = 60;
@@ -24,11 +24,16 @@ final class Search
     /**
      * Relevance cut-offs for the meaning search (cosine similarity, 1 = identical).
      * Calibrated on real queries — see README "How it was tested".
+     * With Gemini embeddings even unrelated Hebrew texts score ~0.60, so what matters is
+     * whether the best matches STAND OUT from the rest, not the raw score.
      *  - MIN_SIMILARITY: below this a product is not related to the query at all.
-     *  - RELATIVE_GAP: keep only products reasonably close to the best match.
+     *  - MIN_SPREAD:     if the best and the 50th candidate are this close, nothing stands out
+     *                    (e.g. "הגדרות" / "settings") -> no meaning-based results at all.
+     *  - RELATIVE_GAP:   keep only products close to the best match (at most half the spread).
      */
-    public const MIN_SIMILARITY = 0.55;
-    public const RELATIVE_GAP = 0.12;
+    public const MIN_SIMILARITY = 0.60;
+    public const MIN_SPREAD = 0.03;
+    public const RELATIVE_GAP = 0.06;
 
     /** Keyword weight per field: a word in the product name counts more than in the description. */
     private const FIELD_WEIGHTS = ['name_norm' => 3.0, 'brand_norm' => 3.0, 'cat_norm' => 2.0, 'needs_norm' => 1.5, 'desc_norm' => 1.0];
@@ -95,9 +100,9 @@ final class Search
     }
 
     /**
-     * Keep the vector hits that pass both relevance thresholds.
+     * Keep the vector hits that clearly stand out (see the constants above).
      *
-     * @param array<string,float> $similarities id => cosine similarity, best first
+     * @param array<string,float> $similarities id => cosine similarity, best first (all candidates)
      * @return array<string,float>
      */
     public static function applyRelevanceCutoff(array $similarities): array
@@ -105,7 +110,12 @@ final class Search
         if (!$similarities) {
             return [];
         }
-        $floor = max(self::MIN_SIMILARITY, reset($similarities) - self::RELATIVE_GAP);
+        $best = reset($similarities);
+        $spread = $best - end($similarities);
+        if (count($similarities) >= self::CANDIDATES && $spread < self::MIN_SPREAD) {
+            return []; // flat distribution: the query has no clear meaning in this catalog
+        }
+        $floor = max(self::MIN_SIMILARITY, $best - min(self::RELATIVE_GAP, $spread / 2));
         return array_filter($similarities, static fn (float $s): bool => $s >= $floor);
     }
 

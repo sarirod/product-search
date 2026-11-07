@@ -66,8 +66,18 @@ same('ties keep vector order first', ['A', 'X'], Search::fuse([['A'], ['X']], 10
 
 echo "Search::applyRelevanceCutoff\n";
 same('drops below absolute floor', [], Search::applyRelevanceCutoff(['A' => Search::MIN_SIMILARITY - 0.01]));
-$cut = Search::applyRelevanceCutoff(['A' => 0.80, 'B' => 0.70, 'C' => 0.80 - Search::RELATIVE_GAP - 0.01]);
-same('keeps close-to-best, drops far ones', ['A', 'B'], array_keys($cut));
+// 50 candidates: a few stand out at the top, the rest form a low "background".
+$cands = ['A' => 0.80, 'B' => 0.78, 'C' => 0.80 - Search::RELATIVE_GAP - 0.01];
+for ($i = count($cands); $i < Search::CANDIDATES; $i++) { $cands["bg$i"] = 0.62; }
+same('keeps close-to-best, drops far ones', ['A', 'B'], array_keys(Search::applyRelevanceCutoff($cands)));
+// Flat distribution (meaningless query like "הגדרות"): everything within MIN_SPREAD -> nothing.
+$flat = [];
+for ($i = 0; $i < Search::CANDIDATES; $i++) { $flat["F$i"] = 0.652 - $i * 0.0004; }
+same('flat distribution returns nothing', [], Search::applyRelevanceCutoff($flat));
+// Narrow spread: the gap shrinks to half the spread, so only the top cluster survives.
+$narrow = ['T1' => 0.660, 'T2' => 0.650, 'T3' => 0.635];
+for ($i = count($narrow); $i < Search::CANDIDATES; $i++) { $narrow["N$i"] = 0.630 - $i * 0.0003; } // spread ~0.045 -> floor ~0.638
+same('narrow spread keeps only the top cluster', ['T1', 'T2'], array_keys(Search::applyRelevanceCutoff($narrow)));
 
 echo "Db::parseUrl\n";
 [$dsn, $user, $pass] = Db::parseUrl('postgresql://alice:p%40ss@ep-cool-1.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require');
