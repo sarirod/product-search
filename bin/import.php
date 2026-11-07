@@ -102,6 +102,11 @@ foreach (array_chunk($missing, BATCH_SIZE) as $n => $batch) {
             $vectors = $embedder->embedDocuments(array_map(static fn ($id) => $texts[$id], $batch));
             break;
         } catch (RuntimeException $e) {
+            if ($e instanceof EmbedderRateLimited && $e->dailyQuota) {
+                fwrite(STDERR, "Gemini's daily embedding quota is used up — retrying today won't help.\n");
+                fwrite(STDERR, "Already-embedded batches are saved ({$stats['embedded']} this run). Re-run after the quota resets (midnight US Pacific time).\n");
+                exit(1);
+            }
             if ($attempt >= MAX_RETRIES) {
                 fwrite(STDERR, "Embedding failed after $attempt attempts: {$e->getMessage()}\n");
                 fwrite(STDERR, "Already-embedded batches are saved. Re-run the script to continue.\n");

@@ -121,7 +121,10 @@ final class Embedder
         }
         $data = json_decode((string) $raw, true);
         if ($status === 429) {
-            throw new EmbedderRateLimited('Gemini rate limit reached (HTTP 429)');
+            $reason = is_array($data) ? (string) ($data['error']['message'] ?? '') : '';
+            $daily = stripos($reason, 'per day') !== false || stripos($reason, 'PerDay') !== false;
+            $short = $daily ? 'daily quota exhausted' : 'per-minute limit';
+            throw new EmbedderRateLimited("Gemini rate limit reached (HTTP 429, $short)", $daily);
         }
         if ($status !== 200 || !is_array($data)) {
             $message = is_array($data) ? (string) ($data['error']['message'] ?? 'unknown error') : 'invalid JSON';
