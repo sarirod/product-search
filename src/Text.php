@@ -101,12 +101,18 @@ final class Text
     public static function wordStartRegex(string $token): string
     {
         $alts = array_map(
-            static function (string $v): string {
+            static function (string $v) use ($token): string {
                 $escaped = (string) preg_replace('/[\\\\.^$|?*+()\[\]{}]/', '\\\\$0', $v);
-                // Short Hebrew words: any continuation is too permissive ("לגו" would match "לגוף"),
-                // so only real Hebrew inflection endings may follow, then the word must end.
-                if (preg_match('/^\p{Hebrew}+$/u', $v) && mb_strlen($v) <= 3) {
+                $hebrew = (bool) preg_match('/^\p{Hebrew}+$/u', $v);
+                // A stem left after peeling prefix letters is only a guess ("מכונית" -> "ונית"), and short
+                // words are too permissive as prefixes ("לגו" would match "לגוף", "cat" would match "catan").
+                // Both must be followed only by a real inflection ending, then the end of the word.
+                $peeled = !str_starts_with($token, $v);
+                if ($hebrew && ($peeled || mb_strlen($v) <= 3)) {
                     return $escaped . self::SHORT_WORD_ENDING;
+                }
+                if (!$hebrew && !self::isNumeric($v) && mb_strlen($v) <= 3) {
+                    return $escaped . self::SHORT_LATIN_ENDING;
                 }
                 return $escaped;
             },
@@ -117,4 +123,7 @@ final class Text
 
     /** Optional Hebrew suffix (plural / feminine / possessive), then end of word. */
     private const SHORT_WORD_ENDING = '(ים|ות|ה|ת|י|ו|יות|ית)?($|[^א-תa-z0-9])';
+
+    /** Optional English plural, then end of word ("cat" ~ "cats", not "catan"). */
+    private const SHORT_LATIN_ENDING = '(s|es)?($|[^א-תa-z0-9])';
 }

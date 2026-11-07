@@ -134,6 +134,9 @@ final class Search
     public static function filterKeywordHits(array $keywordMatched, int $wordTokens, ?array $vectorPool): array
     {
         if ($vectorPool === null) {
+            // Keyword-only fallback: keep partial matches too (full matches are already ranked first).
+            // Tried dropping partials when a full match exists — it hurt more than it helped:
+            // "אוזניות זולות" went from all headphones to 2 products.
             return $keywordMatched;
         }
         // "Strong" keyword hit: all words, or at least 2 words and ~60% of them

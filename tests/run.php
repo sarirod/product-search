@@ -58,6 +58,12 @@ check('does not match in the middle of a word', preg_match($re, 'אבגכלב') 
 $reLego = '/' . str_replace('/', '\/', Text::wordStartRegex('לגו')) . '/u';
 check('short word does not match a longer word ("לגו" vs "לגוף")', preg_match($reLego, 'מכשיר אפילציה לגוף') === 0);
 check('short word still matches itself with a prefix ("הלגו")', preg_match($reLego, 'ערכת הלגו הגדולה') === 1 && preg_match($reLego, 'לגו') === 1);
+$reCar = '/' . str_replace('/', '\/', Text::wordStartRegex('מכונית')) . '/u';
+check('peeled stem must be a whole word ("מכונית" does not match "וניתן")', preg_match($reCar, 'סוגר קיר וניתן להטיה') === 0 && preg_match($reCar, 'מכונית שלט רחוק') === 1);
+$reCat = '/' . str_replace('/', '\/', Text::wordStartRegex('cat')) . '/u';
+check('short English word: "cat" ~ "cats", not "catan"', preg_match($reCat, 'catan board game') === 0 && preg_match($reCat, 'toys for cats') === 1);
+$reVac = '/' . str_replace('/', '\/', Text::wordStartRegex('vacuum')) . '/u';
+check('longer English word still prefix-matches ("vacuum" ~ "vacuums")', preg_match($reVac, 'robot vacuums') === 1);
 $reSofa = '/' . str_replace('/', '\/', Text::wordStartRegex('ספה')) . '/u';
 check('short word matches before a space / at the end ("מהספה", "ספה")', preg_match($reSofa, 'שערות מהספה והשטיח') === 1 && preg_match($reSofa, 'ספה') === 1);
 check('short word does not match a different longer word ("ספה" vs "ספהר")', preg_match($reSofa, 'ספהר') === 0);
@@ -92,7 +98,7 @@ $kw = ['FULL' => 3, 'PARTIAL_IN_POOL' => 2, 'PARTIAL_NOISE' => 1];
 same('partial match kept only if meaning search also has it', ['FULL', 'PARTIAL_IN_POOL'], array_keys(Search::filterKeywordHits($kw, 3, ['PARTIAL_IN_POOL' => 0.61])));
 same('2 of 3 words is a strong match even without meaning support', ['FULL', 'PARTIAL_IN_POOL'], array_keys(Search::filterKeywordHits($kw, 3, [])));
 same('1 of 2 words needs meaning support', ['B'], array_keys(Search::filterKeywordHits(['A' => 1, 'B' => 2], 2, [])));
-same('keyword-only mode keeps everything', array_keys($kw), array_keys(Search::filterKeywordHits($kw, 3, null)));
+same('keyword-only mode keeps everything (full matches are ranked first anyway)', array_keys($kw), array_keys(Search::filterKeywordHits($kw, 3, null)));
 same('number-only query keeps everything', ['N'], array_keys(Search::filterKeywordHits(['N' => 0], 0, [])));
 
 echo "Db::parseUrl\n";
