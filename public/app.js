@@ -79,7 +79,8 @@
 
   function updateUrl(query, replace) {
     const url = query ? `?q=${encodeURIComponent(query)}` : location.pathname;
-    if (replace) history.replaceState({ q: query }, '', url);
+    const sameAsCurrent = (new URLSearchParams(location.search).get('q') || '') === query;
+    if (replace || sameAsCurrent) history.replaceState({ q: query }, '', url); // no duplicate Back steps
     else history.pushState({ q: query }, '', url);
     document.title = query ? `${query} · חיפוש חכם` : 'חיפוש חכם בקטלוג';
   }
