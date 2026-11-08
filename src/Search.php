@@ -68,7 +68,7 @@ final class Search
         $tokens = $this->correctSpelling($tokens);
         $wordTokens = count(array_filter($tokens, static fn (string $t): bool => !Text::isNumeric($t)));
         $descriptionOnly = [];
-        $keywordMatched = $tokens ? $this->keywordCandidates($tokens, $descriptionOnly) : [];
+        $keywordMatched = $tokens ? $this->keywordCandidates($tokens, $wordTokens, $descriptionOnly) : [];
         $keywordHits = self::filterKeywordHits($keywordMatched, $wordTokens, $vectorPool === null ? null : $vectorHits, $descriptionOnly);
 
         $ids = self::fuse([array_keys($vectorHits), array_keys($keywordHits)], self::MAX_RESULTS);
@@ -130,16 +130,16 @@ final class Search
      *    "ערכת לימוד מגע לילדים" (only the word "מגע" matched, and the meaning is unrelated);
      *  - hits where the words appear ONLY in the long description. Removes e.g. a beard trimmer
      *    for "הגדרות" (its description says "3 הגדרות אורך"), which looks random on a result card.
-     * Without meaning search ($vectorPool === null) all keyword hits are kept.
+     * Without meaning search ($vectorHits === null) all keyword hits are kept.
      *
      * @param array<string,int>        $keywordMatched  id => number of query words matched, best first
-     * @param array<string,float>|null $vectorPool      id => similarity of the relevant vector hits
+     * @param array<string,float>|null $vectorHits      id => similarity of the vector hits that passed the cut-off
      * @param array<string,true>       $descriptionOnly ids whose words were found only in the description
      * @return array<string,int>
      */
-    public static function filterKeywordHits(array $keywordMatched, int $wordTokens, ?array $vectorPool, array $descriptionOnly = []): array
+    public static function filterKeywordHits(array $keywordMatched, int $wordTokens, ?array $vectorHits, array $descriptionOnly = []): array
     {
-        if ($vectorPool === null) {
+        if ($vectorHits === null) {
             // Keyword-only fallback: keep partial matches too (full matches are already ranked first).
             // Tried dropping partials when a full match exists — it hurt more than it helped:
             // "אוזניות זולות" went from all headphones to 2 products.
@@ -150,7 +150,7 @@ final class Search
         $strong = min($wordTokens, max(2, (int) ceil($wordTokens * 0.6)));
         return array_filter(
             $keywordMatched,
-            static fn (int $matched, string $id): bool => isset($vectorPool[$id])
+            static fn (int $matched, string $id): bool => isset($vectorHits[$id])
                 || ($matched >= $strong && ($wordTokens === 0 || !isset($descriptionOnly[$id]))),
             ARRAY_FILTER_USE_BOTH
         );
@@ -159,7 +159,7 @@ final class Search
     /** Replace English words that do not exist in the catalog with the closest catalog word. */
     private function correctSpelling(array $tokens): array
     {
-        if (!array_filter($tokens, static fn (string $t): bool => (bool) preg_match('/^[a-z]{4,}$/', $t))) {
+        if (!array_filter($tokens, [Text::class, 'isCorrectable'])) {
             return $tokens; // nothing to correct: skip the vocabulary query
         }
         $vocabulary = [];
@@ -219,19 +219,19 @@ final class Search
      * A product must match at least half of the meaningful words; numbers ("16", "128") count less.
      *
      * @param list<string>       $tokens
+     * @param int                $wordTokens      how many of the tokens are words (not numbers)
      * @param array<string,true> $descriptionOnly filled with ids whose words were found only in the description
      * @return array<string,int> id => number of query words matched, best first
      */
-    private function keywordCandidates(array $tokens, array &$descriptionOnly = []): array
+    private function keywordCandidates(array $tokens, int $wordTokens, array &$descriptionOnly = []): array
     {
         $terms = [];
-        $wordTokens = 0;
         foreach ($tokens as $t) {
             $numeric = Text::isNumeric($t);
-            $wordTokens += $numeric ? 0 : 1;
             $terms[] = ['re' => Text::wordStartRegex($t), 'wt' => $numeric ? 0.3 : 1.0, 'counts' => $numeric ? 0 : 1];
         }
-        $minMatched = max(1, (int) ceil($wordTokens * 0.5));
+        // Pure-number queries (e.g. "128") have no word tokens: then any match is enough.
+        $minMatched = $wordTokens === 0 ? 0 : max(1, (int) ceil($wordTokens * 0.5));
 
         $cases = '';
         foreach (self::FIELD_WEIGHTS as $field => $weight) {
@@ -255,13 +255,8 @@ final class Search
              ORDER BY matched DESC, score DESC, id
              LIMIT " . self::CANDIDATES;
 
-        // Pure-number queries (e.g. "128") have no word tokens: then any match is enough.
-        $stmt = $this->db->prepare($wordTokens === 0 ? str_replace('>= :min', '>= 0', $sql) : $sql);
-        $params = ['terms' => json_encode($terms, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)];
-        if ($wordTokens > 0) {
-            $params['min'] = $minMatched;
-        }
-        $stmt->execute($params);
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['terms' => json_encode($terms, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), 'min' => $minMatched]);
 
         $out = [];
         foreach ($stmt as $row) {

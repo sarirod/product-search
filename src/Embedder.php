@@ -11,10 +11,15 @@ declare(strict_types=1);
 final class Embedder
 {
     private const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
+    private const DEFAULT_MODEL = 'gemini-embedding-001';
+
+    /** Seconds. A search query must be fast (else we fall back to keywords); an import batch may take longer. */
+    private const QUERY_TIMEOUT = 3.0;
+    private const BATCH_TIMEOUT = 60.0;
 
     public function __construct(
         private readonly string $apiKey,
-        public readonly string $model = 'gemini-embedding-001',
+        public readonly string $model = self::DEFAULT_MODEL,
         public readonly int $dimensions = 768,
     ) {
     }
@@ -23,24 +28,21 @@ final class Embedder
     public static function fromEnv(): ?self
     {
         $key = Env::get('GEMINI_API_KEY');
-        if ($key === null) {
-            return null;
-        }
-        return new self($key, Env::get('GEMINI_EMBED_MODEL', 'gemini-embedding-001') ?? 'gemini-embedding-001');
+        return $key === null ? null : new self($key, Env::get('GEMINI_EMBED_MODEL') ?? self::DEFAULT_MODEL);
     }
 
     /**
-     * Embedding for a user's search query. Short timeout: if Gemini is slow we fall back to keywords.
+     * Embedding for a user's search query.
      *
      * @return list<float>
      */
-    public function embedQuery(string $text, float $timeoutSeconds = 3.0): array
+    public function embedQuery(string $text): array
     {
         $response = $this->post(':embedContent', [
             'content'              => ['parts' => [['text' => $text]]],
             'taskType'             => 'RETRIEVAL_QUERY',
             'outputDimensionality' => $this->dimensions,
-        ], $timeoutSeconds);
+        ], self::QUERY_TIMEOUT);
 
         return self::unitVector($this->extractValues($response['embedding'] ?? null));
     }
@@ -51,7 +53,7 @@ final class Embedder
      * @param list<string> $texts
      * @return list<list<float>>
      */
-    public function embedDocuments(array $texts, float $timeoutSeconds = 60.0): array
+    public function embedDocuments(array $texts): array
     {
         $requests = array_map(fn (string $t): array => [
             'model'                => 'models/' . $this->model,
@@ -60,7 +62,7 @@ final class Embedder
             'outputDimensionality' => $this->dimensions,
         ], $texts);
 
-        $response = $this->post(':batchEmbedContents', ['requests' => $requests], $timeoutSeconds);
+        $response = $this->post(':batchEmbedContents', ['requests' => $requests], self::BATCH_TIMEOUT);
         $embeddings = $response['embeddings'] ?? null;
         if (!is_array($embeddings) || count($embeddings) !== count($texts)) {
             throw new RuntimeException('Gemini returned an unexpected number of embeddings');

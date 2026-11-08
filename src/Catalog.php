@@ -10,7 +10,7 @@ declare(strict_types=1);
  */
 final class Catalog
 {
-    public const CATALOG_COLUMNS = ['id', 'name', 'brand', 'category', 'subcategory', 'description', 'attributes', 'image_url'];
+    private const CATALOG_COLUMNS = ['id', 'name', 'brand', 'category', 'subcategory', 'description', 'attributes', 'image_url'];
 
     /**
      * @return list<array<string,mixed>> one row per product
@@ -84,7 +84,7 @@ final class Catalog
      * @param list<string> $expectedHeader
      * @return array<int,array<string,string>> keyed by 1-based line number
      */
-    public static function readCsv(string $path, array $expectedHeader): array
+    private static function readCsv(string $path, array $expectedHeader): array
     {
         $fh = @fopen($path, 'rb');
         if ($fh === false) {

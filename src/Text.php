@@ -133,6 +133,12 @@ final class Text
     /** Optional English ending, then end of word ("cat" ~ "cats", "cook" ~ "cooking"). */
     private const SHORT_LATIN_ENDING = '(s|es|ing|er|ers|ed)?($|[^א-תa-z0-9])';
 
+    /** Only English words of 4+ letters are spell-corrected (shorter words have too many neighbours). */
+    public static function isCorrectable(string $token): bool
+    {
+        return (bool) preg_match('/^[a-z]{4,}$/', $token);
+    }
+
     /**
      * Spelling correction for an English word that does not appear in the catalog at all:
      * returns the closest catalog word ("dysn" -> "dyson", "ipone" -> "iphone"), or null.
@@ -143,10 +149,10 @@ final class Text
      */
     public static function closestWord(string $token, array $vocabulary): ?string
     {
-        $length = strlen($token);
-        if (!preg_match('/^[a-z]{4,}$/', $token)) {
+        if (!self::isCorrectable($token)) {
             return null;
         }
+        $length = strlen($token);
         foreach ($vocabulary as $word => $count) {
             if (str_starts_with((string) $word, $token)) {
                 return null; // a known word (or the start of one): nothing to correct

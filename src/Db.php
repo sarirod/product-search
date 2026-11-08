@@ -7,9 +7,9 @@ declare(strict_types=1);
  */
 final class Db
 {
-    public static function connect(?string $url = null): PDO
+    public static function connect(): PDO
     {
-        $url ??= Env::get('DATABASE_URL');
+        $url = Env::get('DATABASE_URL');
         if ($url === null) {
             throw new RuntimeException('DATABASE_URL is not set');
         }
