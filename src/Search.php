@@ -65,8 +65,11 @@ final class Search
             }
         }
         $vectorHits = self::applyRelevanceCutoff($vectorPool ?? []);
+        $tokens = $this->correctSpelling($tokens);
         $wordTokens = count(array_filter($tokens, static fn (string $t): bool => !Text::isNumeric($t)));
-        $keywordHits = self::filterKeywordHits($tokens ? $this->keywordCandidates($tokens) : [], $wordTokens, $vectorPool === null ? null : $vectorHits);
+        $descriptionOnly = [];
+        $keywordMatched = $tokens ? $this->keywordCandidates($tokens, $descriptionOnly) : [];
+        $keywordHits = self::filterKeywordHits($keywordMatched, $wordTokens, $vectorPool === null ? null : $vectorHits, $descriptionOnly);
 
         $ids = self::fuse([array_keys($vectorHits), array_keys($keywordHits)], self::MAX_RESULTS);
         $results = $this->fetchProducts($ids);
@@ -122,16 +125,19 @@ final class Search
     }
 
     /**
-     * A keyword hit that matched only SOME of the query words is kept only if the meaning search
-     * also considers it a candidate. This removes noise such as "מד חום מגע" for
-     * "ערכת לימוד מגע לילדים" (only the word "מגע" matched, and the meaning is unrelated).
+     * Weak keyword hits are kept only if the meaning search also considers them relevant:
+     *  - hits that matched only SOME of the query words. Removes noise such as "מד חום מגע" for
+     *    "ערכת לימוד מגע לילדים" (only the word "מגע" matched, and the meaning is unrelated);
+     *  - hits where the words appear ONLY in the long description. Removes e.g. a beard trimmer
+     *    for "הגדרות" (its description says "3 הגדרות אורך"), which looks random on a result card.
      * Without meaning search ($vectorPool === null) all keyword hits are kept.
      *
-     * @param array<string,int>        $keywordMatched id => number of query words matched, best first
-     * @param array<string,float>|null $vectorPool     id => similarity of all vector candidates
+     * @param array<string,int>        $keywordMatched  id => number of query words matched, best first
+     * @param array<string,float>|null $vectorPool      id => similarity of the relevant vector hits
+     * @param array<string,true>       $descriptionOnly ids whose words were found only in the description
      * @return array<string,int>
      */
-    public static function filterKeywordHits(array $keywordMatched, int $wordTokens, ?array $vectorPool): array
+    public static function filterKeywordHits(array $keywordMatched, int $wordTokens, ?array $vectorPool, array $descriptionOnly = []): array
     {
         if ($vectorPool === null) {
             // Keyword-only fallback: keep partial matches too (full matches are already ranked first).
@@ -144,9 +150,31 @@ final class Search
         $strong = min($wordTokens, max(2, (int) ceil($wordTokens * 0.6)));
         return array_filter(
             $keywordMatched,
-            static fn (int $matched, string $id): bool => $matched >= $strong || isset($vectorPool[$id]),
+            static fn (int $matched, string $id): bool => isset($vectorPool[$id])
+                || ($matched >= $strong && ($wordTokens === 0 || !isset($descriptionOnly[$id]))),
             ARRAY_FILTER_USE_BOTH
         );
+    }
+
+    /** Replace English words that do not exist in the catalog with the closest catalog word. */
+    private function correctSpelling(array $tokens): array
+    {
+        if (!array_filter($tokens, static fn (string $t): bool => (bool) preg_match('/^[a-z]{4,}$/', $t))) {
+            return $tokens; // nothing to correct: skip the vocabulary query
+        }
+        $vocabulary = [];
+        $stmt = $this->db->query(
+            "SELECT w, COUNT(*) AS n
+               FROM products,
+                    regexp_split_to_table(concat_ws(' ', name_norm, brand_norm, needs_norm, desc_norm), '[^a-z]+') AS w
+              WHERE length(w) >= 3
+              GROUP BY w"
+        );
+        foreach ($stmt as $row) {
+            $vocabulary[(string) $row['w']] = (int) $row['n'];
+        }
+        $corrected = array_map(static fn (string $t): string => Text::closestWord($t, $vocabulary) ?? $t, $tokens);
+        return array_values(array_unique($corrected));
     }
 
     /** Query vector as a pgvector literal; cached in the DB so repeated searches skip the API call. */
@@ -190,10 +218,11 @@ final class Search
      * Each query word becomes a regex that matches the start of a word (Hebrew prefixes allowed).
      * A product must match at least half of the meaningful words; numbers ("16", "128") count less.
      *
-     * @param list<string> $tokens
+     * @param list<string>       $tokens
+     * @param array<string,true> $descriptionOnly filled with ids whose words were found only in the description
      * @return array<string,int> id => number of query words matched, best first
      */
-    private function keywordCandidates(array $tokens): array
+    private function keywordCandidates(array $tokens, array &$descriptionOnly = []): array
     {
         $terms = [];
         $wordTokens = 0;
@@ -218,7 +247,8 @@ final class Search
             )
             SELECT id,
                    SUM(counts) FILTER (WHERE w > 0) AS matched,
-                   SUM(w * wt) AS score
+                   SUM(w * wt) AS score,
+                   MAX(w) AS best_field
               FROM hits
              GROUP BY id
             HAVING SUM(w) > 0 AND COALESCE(SUM(counts) FILTER (WHERE w > 0), 0) >= :min
@@ -236,6 +266,9 @@ final class Search
         $out = [];
         foreach ($stmt as $row) {
             $out[(string) $row['id']] = (int) $row['matched'];
+            if ((float) $row['best_field'] <= self::FIELD_WEIGHTS['desc_norm']) {
+                $descriptionOnly[(string) $row['id']] = true;
+            }
         }
         return $out;
     }

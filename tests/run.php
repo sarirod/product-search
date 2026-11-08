@@ -64,12 +64,27 @@ $reCat = '/' . str_replace('/', '\/', Text::wordStartRegex('cat')) . '/u';
 check('short English word: "cat" ~ "cats", not "catan"', preg_match($reCat, 'catan board game') === 0 && preg_match($reCat, 'toys for cats') === 1);
 $reVac = '/' . str_replace('/', '\/', Text::wordStartRegex('vacuum')) . '/u';
 check('longer English word still prefix-matches ("vacuum" ~ "vacuums")', preg_match($reVac, 'robot vacuums') === 1);
+$reBaby = '/' . str_replace('/', '\/', Text::wordStartRegex('baby')) . '/u';
+check('4-letter English word is whole-word: "baby" ~ "baby food", not brand "babyliss"', preg_match($reBaby, 'babyliss') === 0 && preg_match($reBaby, 'soups baby food') === 1);
+$reCook = '/' . str_replace('/', '\/', Text::wordStartRegex('cook')) . '/u';
+check('short English word allows common endings ("cook" ~ "cooking")', preg_match($reCook, 'family cooking') === 1 && preg_match($reCook, 'cookbook') === 0);
 $reSofa = '/' . str_replace('/', '\/', Text::wordStartRegex('ספה')) . '/u';
 check('short word matches before a space / at the end ("מהספה", "ספה")', preg_match($reSofa, 'שערות מהספה והשטיח') === 1 && preg_match($reSofa, 'ספה') === 1);
 check('short word does not match a different longer word ("ספה" vs "ספהר")', preg_match($reSofa, 'ספהר') === 0);
 check('"כלב" still matches "לכלבים" (3 letters + ים)', preg_match($re, 'מיטה לכלבים') === 1);
 $reDot = '/' . str_replace('/', '\/', Text::wordStartRegex('2.5')) . '/u';
 check('escapes regex characters', preg_match($reDot, 'נפח 2x5') === 0 && preg_match($reDot, 'נפח 2.5 ליטר') === 1);
+
+echo "Text::closestWord (English spelling correction)\n";
+$vocab = ['dyson' => 3, 'iphone' => 5, 'phone' => 9, 'fryer' => 2, 'vacuum' => 20, 'babyliss' => 2];
+same('brand typo', 'dyson', Text::closestWord('dysn', $vocab));
+same('missing letter', 'iphone', Text::closestWord('ipone', $vocab));
+same('wrong letter', 'fryer', Text::closestWord('frier', $vocab));
+same('known word is not changed', null, Text::closestWord('vacuum', $vocab));
+same('start of a known word is not changed', null, Text::closestWord('vacu', $vocab));
+same('too far from every word', null, Text::closestWord('blorp', $vocab));
+same('Hebrew, numbers and short words are left alone', [null, null, null], [Text::closestWord('דייסן', $vocab), Text::closestWord('1288', $vocab), Text::closestWord('dys', $vocab)]);
+same('tie goes to the more common word', 'phone', Text::closestWord('phoni', ['phony' => 1, 'phone' => 9]));
 
 echo "Search::fuse (Reciprocal Rank Fusion)\n";
 same('item in both lists wins', 'B', Search::fuse([['A', 'B', 'C'], ['B', 'D']], 10)[0]);
@@ -100,6 +115,9 @@ same('2 of 3 words is a strong match even without meaning support', ['FULL', 'PA
 same('1 of 2 words needs meaning support', ['B'], array_keys(Search::filterKeywordHits(['A' => 1, 'B' => 2], 2, [])));
 same('keyword-only mode keeps everything (full matches are ranked first anyway)', array_keys($kw), array_keys(Search::filterKeywordHits($kw, 3, null)));
 same('number-only query keeps everything', ['N'], array_keys(Search::filterKeywordHits(['N' => 0], 0, [])));
+same('description-only match needs meaning support', ['NAME', 'DESC_IN_POOL'], array_keys(Search::filterKeywordHits(['NAME' => 1, 'DESC' => 1, 'DESC_IN_POOL' => 1], 1, ['DESC_IN_POOL' => 0.7], ['DESC' => true, 'DESC_IN_POOL' => true])));
+same('keyword-only mode keeps description-only matches', ['DESC'], array_keys(Search::filterKeywordHits(['DESC' => 1], 1, null, ['DESC' => true])));
+same('number-only query keeps description-only matches', ['N'], array_keys(Search::filterKeywordHits(['N' => 0], 0, [], ['N' => true])));
 
 echo "Db::parseUrl\n";
 [$dsn, $user, $pass] = Db::parseUrl('postgresql://alice:p%40ss@ep-cool-1.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require');

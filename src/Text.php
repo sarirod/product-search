@@ -111,7 +111,7 @@ final class Text
                 if ($hebrew && ($peeled || mb_strlen($v) <= 3)) {
                     return $escaped . self::SHORT_WORD_ENDING;
                 }
-                if (!$hebrew && !self::isNumeric($v) && mb_strlen($v) <= 3) {
+                if (!$hebrew && !self::isNumeric($v) && mb_strlen($v) <= self::SHORT_LATIN_MAX) {
                     return $escaped . self::SHORT_LATIN_ENDING;
                 }
                 return $escaped;
@@ -124,6 +124,48 @@ final class Text
     /** Optional Hebrew suffix (plural / feminine / possessive), then end of word. */
     private const SHORT_WORD_ENDING = '(ים|ות|ה|ת|י|ו|יות|ית)?($|[^א-תa-z0-9])';
 
-    /** Optional English plural, then end of word ("cat" ~ "cats", not "catan"). */
-    private const SHORT_LATIN_ENDING = '(s|es)?($|[^א-תa-z0-9])';
+    /**
+     * English words up to this length must be whole words: short words are too often the start of an
+     * unrelated longer word ("cat" ~ "catan", "baby" ~ the brand "babyliss", "back" ~ "backpack").
+     */
+    private const SHORT_LATIN_MAX = 4;
+
+    /** Optional English ending, then end of word ("cat" ~ "cats", "cook" ~ "cooking"). */
+    private const SHORT_LATIN_ENDING = '(s|es|ing|er|ers|ed)?($|[^א-תa-z0-9])';
+
+    /**
+     * Spelling correction for an English word that does not appear in the catalog at all:
+     * returns the closest catalog word ("dysn" -> "dyson", "ipone" -> "iphone"), or null.
+     * Allowed edit distance: 1 for words of 4-6 letters, 2 for longer words. Ties go to the more
+     * common word. Hebrew is left to the meaning search (Hebrew typos are already handled well there).
+     *
+     * @param array<string,int> $vocabulary catalog word => number of products that contain it
+     */
+    public static function closestWord(string $token, array $vocabulary): ?string
+    {
+        $length = strlen($token);
+        if (!preg_match('/^[a-z]{4,}$/', $token)) {
+            return null;
+        }
+        foreach ($vocabulary as $word => $count) {
+            if (str_starts_with((string) $word, $token)) {
+                return null; // a known word (or the start of one): nothing to correct
+            }
+        }
+        $maxDistance = $length >= 7 ? 2 : 1;
+        $best = null;
+        $bestKey = null;
+        foreach ($vocabulary as $word => $count) {
+            $word = (string) $word;
+            if (abs(strlen($word) - $length) > $maxDistance) {
+                continue;
+            }
+            $distance = levenshtein($token, $word);
+            $key = [$distance, -$count, $word];
+            if ($distance <= $maxDistance && ($bestKey === null || $key < $bestKey)) {
+                [$best, $bestKey] = [$word, $key];
+            }
+        }
+        return $best;
+    }
 }
